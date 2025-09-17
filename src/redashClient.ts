@@ -337,9 +337,36 @@ export class RedashClient {
         logger.debug(`Job ${jobId} status: ${job.status}, continuing to poll...`);
         // Wait for the next poll
         await new Promise(resolve => setTimeout(resolve, interval));
-      } catch (error) {
+      } catch (error: any) {
         logger.error(`Error polling for query results (job ${jobId}): ${error}`);
-        throw new Error(`Failed to poll for query results (job ${jobId})`);
+
+        // Extract detailed error information if available
+        let errorMessage = `Failed to poll for query results (job ${jobId})`;
+
+        // Check if it's an axios error with response data
+        if (error.response) {
+          logger.error(`Axios error in polling - Status: ${error.response?.status || 'unknown'}`);
+          logger.error(`Response data: ${JSON.stringify(error.response?.data || {}, null, 2)}`);
+
+          // Include API response details in the error message
+          if (error.response.data) {
+            if (typeof error.response.data === 'string') {
+              errorMessage += `: ${error.response.data}`;
+            } else if (error.response.data.message) {
+              errorMessage += `: ${error.response.data.message}`;
+            } else {
+              errorMessage += `: ${JSON.stringify(error.response.data)}`;
+            }
+          } else {
+            errorMessage += `: HTTP ${error.response.status}`;
+          }
+        } else if (error instanceof Error) {
+          errorMessage += `: ${error.message}`;
+        } else if (typeof error === 'string') {
+          errorMessage += `: ${error}`;
+        }
+
+        throw new Error(errorMessage);
       }
     }
 

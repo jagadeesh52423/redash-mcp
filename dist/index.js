@@ -303,13 +303,15 @@ async function executeRawQuery(params) {
         };
     }
     catch (error) {
-        logger.error(`Error executing raw query: ${error}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(`Error executing raw query: ${errorMessage}`);
+        // Include the full error message with more detail for the user
         return {
             isError: true,
             content: [
                 {
                     type: "text",
-                    text: `Error executing raw query: ${error instanceof Error ? error.message : String(error)}`
+                    text: `Error executing raw query: ${errorMessage}`
                 }
             ]
         };
