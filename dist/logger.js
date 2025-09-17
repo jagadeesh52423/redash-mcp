@@ -1,0 +1,76 @@
+// Custom logger for the Redash MCP server
+/**
+ * Log levels supported by MCP
+ */
+export var LogLevel;
+(function (LogLevel) {
+    LogLevel["DEBUG"] = "debug";
+    LogLevel["INFO"] = "info";
+    LogLevel["NOTICE"] = "notice";
+    LogLevel["WARNING"] = "warning";
+    LogLevel["ERROR"] = "error";
+    LogLevel["CRITICAL"] = "critical";
+    LogLevel["ALERT"] = "alert";
+    LogLevel["EMERGENCY"] = "emergency";
+})(LogLevel || (LogLevel = {}));
+/**
+ * Logger class that outputs to both console and can send notifications to clients
+ */
+export class Logger {
+    server = null;
+    /**
+     * Sets the MCP server instance to enable sending log notifications
+     */
+    setServer(server) {
+        this.server = server;
+    }
+    /**
+     * Log a debug message
+     */
+    debug(message) {
+        this.log(LogLevel.DEBUG, message);
+    }
+    /**
+     * Log an info message
+     */
+    info(message) {
+        this.log(LogLevel.INFO, message);
+    }
+    /**
+     * Log a warning message
+     */
+    warning(message) {
+        this.log(LogLevel.WARNING, message);
+    }
+    /**
+     * Log an error message
+     */
+    error(message) {
+        this.log(LogLevel.ERROR, message);
+    }
+    /**
+     * Log a message with the specified level
+     */
+    log(level, message) {
+        // Always output to stderr for local debugging
+        console.error(`[${level.toUpperCase()}] ${message}`);
+        // If server is set and supports logging notifications, send them
+        if (this.server && typeof this.server.notification === 'function') {
+            try {
+                this.server.notification({
+                    method: "notifications/logging",
+                    params: {
+                        level: level,
+                        data: message
+                    }
+                });
+            }
+            catch (err) {
+                // If notification fails, just log to console
+                console.error(`Failed to send log notification: ${err}`);
+            }
+        }
+    }
+}
+// Export a singleton instance
+export const logger = new Logger();
