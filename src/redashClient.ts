@@ -100,12 +100,14 @@ export class RedashClient {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor() {
-    this.baseUrl = process.env.REDASH_URL || '';
-    this.apiKey = process.env.REDASH_API_KEY || '';
+  constructor(baseUrl?: string, apiKey?: string, timeout?: number) {
+    // Priority: constructor params > environment variables
+    this.baseUrl = baseUrl || process.env.REDASH_URL || '';
+    this.apiKey = apiKey || process.env.REDASH_API_KEY || '';
+    const timeoutMs = timeout || parseInt(process.env.REDASH_TIMEOUT || '30000');
 
     if (!this.baseUrl || !this.apiKey) {
-      throw new Error('REDASH_URL and REDASH_API_KEY must be provided in .env file');
+      throw new Error('REDASH_URL and REDASH_API_KEY must be provided either as constructor parameters or in .env file');
     }
 
     this.client = axios.create({
@@ -114,7 +116,7 @@ export class RedashClient {
         'Authorization': `Key ${this.apiKey}`,
         'Content-Type': 'application/json'
       },
-      timeout: parseInt(process.env.REDASH_TIMEOUT || '30000')
+      timeout: timeoutMs
     });
   }
 
@@ -415,5 +417,27 @@ export class RedashClient {
   }
 }
 
-// Export a singleton instance
-export const redashClient = new RedashClient();
+// Export a global variable for the client instance
+export let redashClient: RedashClient | undefined;
+
+// Initialize the client with optional configuration
+export function initializeRedashClient(baseUrl?: string, apiKey?: string, timeout?: number) {
+  redashClient = new RedashClient(baseUrl, apiKey, timeout);
+  return redashClient;
+}
+
+// Function to get the client instance, throwing an error if not initialized
+export function getRedashClient(): RedashClient {
+  if (!redashClient) {
+    throw new Error('RedashClient not initialized. Please call initializeRedashClient() first or ensure proper configuration is available.');
+  }
+  return redashClient;
+}
+
+// Try to initialize with default (environment-based) configuration
+try {
+  redashClient = new RedashClient();
+} catch (error) {
+  // Client will be initialized later with CLI arguments if environment variables are missing
+  redashClient = undefined;
+}

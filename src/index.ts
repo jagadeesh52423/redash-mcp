@@ -10,11 +10,29 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as dotenv from 'dotenv';
-import { redashClient, CreateQueryRequest, UpdateQueryRequest } from "./redashClient.js";
+import { redashClient, CreateQueryRequest, UpdateQueryRequest, initializeRedashClient, getRedashClient } from "./redashClient.js";
 import { logger, LogLevel } from "./logger.js";
 
 // Load environment variables
 dotenv.config();
+
+// Type declaration for global redash config
+declare global {
+  var redashConfig: {
+    url: string;
+    apiKey: string;
+    timeout: number;
+  } | undefined;
+}
+
+// Initialize redash client with CLI arguments if available
+if (global.redashConfig) {
+  initializeRedashClient(
+    global.redashConfig.url,
+    global.redashConfig.apiKey,
+    global.redashConfig.timeout
+  );
+}
 
 // Create MCP server instance
 const server = new Server(
@@ -43,7 +61,7 @@ const getQuerySchema = z.object({
 async function getQuery(params: z.infer<typeof getQuerySchema>) {
   try {
     const { queryId } = params;
-    const query = await redashClient.getQuery(queryId);
+    const query = await getRedashClient().getQuery(queryId);
 
     return {
       content: [
@@ -94,7 +112,7 @@ async function createQuery(params: z.infer<typeof createQuerySchema>) {
     };
 
     logger.debug(`Calling redashClient.createQuery with data: ${JSON.stringify(queryData)}`);
-    const result = await redashClient.createQuery(queryData);
+    const result = await getRedashClient().createQuery(queryData);
     logger.debug(`Create query result: ${JSON.stringify(result)}`);
 
     return {
@@ -154,7 +172,7 @@ async function updateQuery(params: z.infer<typeof updateQuerySchema>) {
     if (updateData.is_draft !== undefined) queryData.is_draft = updateData.is_draft;
 
     logger.debug(`Calling redashClient.updateQuery with data: ${JSON.stringify(queryData)}`);
-    const result = await redashClient.updateQuery(queryId, queryData);
+    const result = await getRedashClient().updateQuery(queryId, queryData);
     logger.debug(`Update query result: ${JSON.stringify(result)}`);
 
     return {
@@ -187,7 +205,7 @@ const archiveQuerySchema = z.object({
 async function archiveQuery(params: z.infer<typeof archiveQuerySchema>) {
   try {
     const { queryId } = params;
-    const result = await redashClient.archiveQuery(queryId);
+    const result = await getRedashClient().archiveQuery(queryId);
 
     return {
       content: [
@@ -214,7 +232,7 @@ async function archiveQuery(params: z.infer<typeof archiveQuerySchema>) {
 // Tool: list_data_sources
 async function listDataSources() {
   try {
-    const dataSources = await redashClient.getDataSources();
+    const dataSources = await getRedashClient().getDataSources();
 
     return {
       content: [
@@ -248,7 +266,7 @@ const listQueriesSchema = z.object({
 async function listQueries(params: z.infer<typeof listQueriesSchema>) {
   try {
     const { page, pageSize, q } = params;
-    const queries = await redashClient.getQueries(page, pageSize, q);
+    const queries = await getRedashClient().getQueries(page, pageSize, q);
 
     logger.debug(`Listed ${queries.results.length} queries`);
     return {
@@ -282,7 +300,7 @@ const executeQuerySchema = z.object({
 async function executeQuery(params: z.infer<typeof executeQuerySchema>) {
   try {
     const { queryId, parameters } = params;
-    const result = await redashClient.executeQueryById(queryId, parameters);
+    const result = await getRedashClient().executeQueryById(queryId, parameters);
 
     return {
       content: [
@@ -317,7 +335,7 @@ const executeRawQuerySchema = z.object({
 async function executeRawQuery(params: z.infer<typeof executeRawQuerySchema>) {
   try {
     const { query, dataSourceId, parameters, maxAge } = params;
-    const result = await redashClient.executeQuery(query, dataSourceId, parameters, maxAge);
+    const result = await getRedashClient().executeQuery(query, dataSourceId, parameters, maxAge);
 
     return {
       content: [
@@ -353,7 +371,7 @@ const listDashboardsSchema = z.object({
 async function listDashboards(params: z.infer<typeof listDashboardsSchema>) {
   try {
     const { page, pageSize } = params;
-    const dashboards = await redashClient.getDashboards(page, pageSize);
+    const dashboards = await getRedashClient().getDashboards(page, pageSize);
 
     return {
       content: [
@@ -385,7 +403,7 @@ const getDashboardSchema = z.object({
 async function getDashboard(params: z.infer<typeof getDashboardSchema>) {
   try {
     const { dashboardId } = params;
-    const dashboard = await redashClient.getDashboard(dashboardId);
+    const dashboard = await getRedashClient().getDashboard(dashboardId);
 
     return {
       content: [
@@ -417,7 +435,7 @@ const getVisualizationSchema = z.object({
 async function getVisualization(params: z.infer<typeof getVisualizationSchema>) {
   try {
     const { visualizationId } = params;
-    const visualization = await redashClient.getVisualization(visualizationId);
+    const visualization = await getRedashClient().getVisualization(visualizationId);
 
     return {
       content: [
@@ -447,7 +465,7 @@ async function getVisualization(params: z.infer<typeof getVisualizationSchema>) 
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
   try {
     // List queries as resources
-    const queries = await redashClient.getQueries(1, 100);
+    const queries = await getRedashClient().getQueries(1, 100);
     const queryResources = queries.results.map(query => ({
       uri: `redash://query/${query.id}`,
       name: query.name,
@@ -455,7 +473,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
     }));
 
     // List dashboards as resources
-    const dashboards = await redashClient.getDashboards(1, 100);
+    const dashboards = await getRedashClient().getDashboards(1, 100);
     const dashboardResources = dashboards.results.map(dashboard => ({
       uri: `redash://dashboard/${dashboard.id}`,
       name: dashboard.name,
@@ -488,8 +506,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const resourceId = parseInt(id, 10);
 
     if (type === 'query') {
-      const query = await redashClient.getQuery(resourceId);
-      const result = await redashClient.executeQueryById(resourceId);
+      const query = await getRedashClient().getQuery(resourceId);
+      const result = await getRedashClient().executeQueryById(resourceId);
 
       return {
         contents: [
@@ -504,7 +522,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         ]
       };
     } else if (type === 'dashboard') {
-      const dashboard = await redashClient.getDashboard(resourceId);
+      const dashboard = await getRedashClient().getDashboard(resourceId);
 
       return {
         contents: [
