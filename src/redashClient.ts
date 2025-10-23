@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import * as dotenv from 'dotenv';
+import * as https from 'https';
 import { logger } from './logger.js';
 
 dotenv.config();
@@ -100,7 +101,7 @@ export class RedashClient {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor(baseUrl?: string, apiKey?: string, timeout?: number) {
+  constructor(baseUrl?: string, apiKey?: string, timeout?: number, rejectUnauthorized?: boolean) {
     // Priority: constructor params > environment variables
     this.baseUrl = baseUrl || process.env.REDASH_URL || '';
     this.apiKey = apiKey || process.env.REDASH_API_KEY || '';
@@ -110,13 +111,33 @@ export class RedashClient {
       throw new Error('REDASH_URL and REDASH_API_KEY must be provided either as constructor parameters or in .env file');
     }
 
+    // Determine SSL verification setting with priority:
+    // 1. Constructor parameter
+    // 2. Environment variables
+    // 3. Default to true (secure)
+    let shouldRejectUnauthorized = true;
+
+    if (rejectUnauthorized !== undefined) {
+      shouldRejectUnauthorized = rejectUnauthorized;
+    } else if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+      shouldRejectUnauthorized = false;
+    } else if (process.env.REDASH_IGNORE_SSL_ERRORS === 'true') {
+      shouldRejectUnauthorized = false;
+    }
+
+    // Create HTTPS agent with SSL certificate options
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: shouldRejectUnauthorized
+    });
+
     this.client = axios.create({
       baseURL: this.baseUrl,
       headers: {
         'Authorization': `Key ${this.apiKey}`,
         'Content-Type': 'application/json'
       },
-      timeout: timeoutMs
+      timeout: timeoutMs,
+      httpsAgent: httpsAgent
     });
   }
 
@@ -421,8 +442,8 @@ export class RedashClient {
 export let redashClient: RedashClient | undefined;
 
 // Initialize the client with optional configuration
-export function initializeRedashClient(baseUrl?: string, apiKey?: string, timeout?: number) {
-  redashClient = new RedashClient(baseUrl, apiKey, timeout);
+export function initializeRedashClient(baseUrl?: string, apiKey?: string, timeout?: number, rejectUnauthorized?: boolean) {
+  redashClient = new RedashClient(baseUrl, apiKey, timeout, rejectUnauthorized);
   return redashClient;
 }
 

@@ -22,6 +22,7 @@ declare global {
     url: string;
     apiKey: string;
     timeout: number;
+    rejectUnauthorized: boolean;
   } | undefined;
 }
 
@@ -30,7 +31,8 @@ if (global.redashConfig) {
   initializeRedashClient(
     global.redashConfig.url,
     global.redashConfig.apiKey,
-    global.redashConfig.timeout
+    global.redashConfig.timeout,
+    global.redashConfig.rejectUnauthorized
   );
 }
 

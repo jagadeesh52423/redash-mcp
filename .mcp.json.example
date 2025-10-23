@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "redash": {
+      "command": "node",
+      "args": [
+        "--use-system-ca",
+        "/path/to/redash-mcp/dist/index.js",
+        "--redash-url", "https://your-redash-instance.com",
+        "--redash-api-key", "your_api_key_here",
+        "--ignore-ssl-errors"
+      ],
+      "env": {
+        "REDASH_URL": "https://your-redash-instance.com",
+        "REDASH_API_KEY": "your_api_key_here",
+        "REDASH_IGNORE_SSL_ERRORS": "true",
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+      }
+    }
+  }
+}

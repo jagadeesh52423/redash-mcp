@@ -30,6 +30,12 @@ const argv = yargs(hideBin(process.argv))
     description: 'Request timeout in milliseconds',
     default: 30000
   })
+  .option('ignore-ssl-errors', {
+    alias: 's',
+    type: 'boolean',
+    description: 'Ignore SSL certificate errors (useful for self-signed certificates)',
+    default: false
+  })
   .help()
   .parseSync();
 
@@ -37,6 +43,7 @@ const argv = yargs(hideBin(process.argv))
 const redashUrl = argv['redash-url'] || process.env.REDASH_URL;
 const redashApiKey = argv['redash-api-key'] || process.env.REDASH_API_KEY;
 const redashTimeout = argv['redash-timeout'] || parseInt(process.env.REDASH_TIMEOUT || '30000');
+const ignoreSslErrors = argv['ignore-ssl-errors'] || process.env.REDASH_IGNORE_SSL_ERRORS === 'true';
 
 // Check if we have the required configuration
 if (!redashUrl || !redashApiKey) {
@@ -60,7 +67,8 @@ if (!redashUrl || !redashApiKey) {
 global.redashConfig = {
   url: redashUrl,
   apiKey: redashApiKey,
-  timeout: redashTimeout
+  timeout: redashTimeout,
+  rejectUnauthorized: !ignoreSslErrors
 };
 
 // Run the MCP server
