@@ -10,7 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as dotenv from 'dotenv';
-import { redashClient, CreateQueryRequest, UpdateQueryRequest, initializeRedashClient, getRedashClient } from "./redashClient.js";
+import { redashClient, CreateQueryRequest, UpdateQueryRequest, CreateDashboardRequest, CreateWidgetRequest, UpdateWidgetRequest, initializeRedashClient, getRedashClient } from "./redashClient.js";
 import { logger, LogLevel } from "./logger.js";
 
 // Load environment variables
@@ -461,6 +461,218 @@ async function getVisualization(params: z.infer<typeof getVisualizationSchema>) 
   }
 }
 
+// Tool: create_dashboard
+const createDashboardSchema = z.object({
+  name: z.string(),
+  tags: z.array(z.string()).optional(),
+  is_draft: z.boolean().optional(),
+  dashboard_filters_enabled: z.boolean().optional()
+});
+
+async function createDashboard(params: z.infer<typeof createDashboardSchema>) {
+  try {
+    logger.debug(`Create dashboard params: ${JSON.stringify(params)}`);
+
+    // Convert params to CreateDashboardRequest with proper defaults
+    const dashboardData: CreateDashboardRequest = {
+      name: params.name,
+      tags: params.tags || [],
+      is_draft: params.is_draft !== undefined ? params.is_draft : true,
+      dashboard_filters_enabled: params.dashboard_filters_enabled !== undefined ? params.dashboard_filters_enabled : false
+    };
+
+    logger.debug(`Calling redashClient.createDashboard with data: ${JSON.stringify(dashboardData)}`);
+    const result = await getRedashClient().createDashboard(dashboardData);
+    logger.debug(`Create dashboard result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error creating dashboard: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error creating dashboard: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: create_widget
+const createWidgetSchema = z.object({
+  dashboard_id: z.number(),
+  visualization_id: z.number().optional(),
+  text: z.string().optional(),
+  width: z.number().optional(),
+  options: z.object({
+    parameterMappings: z.record(z.object({
+      name: z.string(),
+      type: z.string(),
+      mapTo: z.string(),
+      value: z.any(),
+      title: z.string()
+    })).optional(),
+    isHidden: z.boolean().optional(),
+    position: z.object({
+      autoHeight: z.boolean().optional(),
+      sizeX: z.number(),
+      sizeY: z.number(),
+      minSizeX: z.number().optional(),
+      maxSizeX: z.number().optional(),
+      minSizeY: z.number().optional(),
+      maxSizeY: z.number().optional(),
+      col: z.number(),
+      row: z.number()
+    }).optional()
+  }).optional()
+});
+
+async function createWidget(params: z.infer<typeof createWidgetSchema>) {
+  try {
+    logger.debug(`Create widget params: ${JSON.stringify(params)}`);
+
+    // Convert params to CreateWidgetRequest
+    const widgetData: CreateWidgetRequest = {
+      dashboard_id: params.dashboard_id,
+      visualization_id: params.visualization_id,
+      text: params.text,
+      width: params.width,
+      options: params.options
+    };
+
+    logger.debug(`Calling redashClient.createWidget with data: ${JSON.stringify(widgetData)}`);
+    const result = await getRedashClient().createWidget(widgetData);
+    logger.debug(`Create widget result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error creating widget: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error creating widget: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: update_widget
+const updateWidgetSchema = z.object({
+  widgetId: z.number(),
+  text: z.string().optional(),
+  width: z.number().optional(),
+  options: z.object({
+    parameterMappings: z.record(z.object({
+      name: z.string(),
+      type: z.string(),
+      mapTo: z.string(),
+      value: z.any(),
+      title: z.string()
+    })).optional(),
+    isHidden: z.boolean().optional(),
+    position: z.object({
+      autoHeight: z.boolean().optional(),
+      sizeX: z.number(),
+      sizeY: z.number(),
+      minSizeX: z.number().optional(),
+      maxSizeX: z.number().optional(),
+      minSizeY: z.number().optional(),
+      maxSizeY: z.number().optional(),
+      col: z.number(),
+      row: z.number()
+    }).optional()
+  }).optional()
+});
+
+async function updateWidget(params: z.infer<typeof updateWidgetSchema>) {
+  try {
+    const { widgetId, ...updateData } = params;
+    logger.debug(`Update widget ${widgetId} params: ${JSON.stringify(updateData)}`);
+
+    // Convert params to UpdateWidgetRequest
+    const widgetData: UpdateWidgetRequest = {
+      text: updateData.text,
+      width: updateData.width,
+      options: updateData.options
+    };
+
+    logger.debug(`Calling redashClient.updateWidget with data: ${JSON.stringify(widgetData)}`);
+    const result = await getRedashClient().updateWidget(widgetId, widgetData);
+    logger.debug(`Update widget result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error updating widget ${params.widgetId}: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error updating widget ${params.widgetId}: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: delete_widget
+const deleteWidgetSchema = z.object({
+  widgetId: z.number()
+});
+
+async function deleteWidget(params: z.infer<typeof deleteWidgetSchema>) {
+  try {
+    const { widgetId } = params;
+    const result = await getRedashClient().deleteWidget(widgetId);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error deleting widget ${params.widgetId}: ${error}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error deleting widget ${params.widgetId}: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
 // ----- Resources Implementation -----
 
 // List available resources
@@ -693,6 +905,106 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["visualizationId"]
         }
+      },
+      {
+        name: "create_dashboard",
+        description: "Create a new dashboard in Redash",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Name of the dashboard" },
+            tags: { type: "array", items: { type: "string" }, description: "Tags for the dashboard" },
+            is_draft: { type: "boolean", description: "Whether the dashboard is a draft (default: true)" },
+            dashboard_filters_enabled: { type: "boolean", description: "Whether dashboard filters are enabled (default: false)" }
+          },
+          required: ["name"]
+        }
+      },
+      {
+        name: "create_widget",
+        description: "Create a new widget in a dashboard (text or visualization widget)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            dashboard_id: { type: "number", description: "ID of the dashboard to add widget to" },
+            visualization_id: { type: "number", description: "ID of the visualization (for visualization widgets)" },
+            text: { type: "string", description: "Text content (for text widgets)" },
+            width: { type: "number", description: "Widget width (default: 1)" },
+            options: {
+              type: "object",
+              description: "Widget options including position and parameter mappings",
+              properties: {
+                parameterMappings: { type: "object", description: "Parameter mappings for dashboard filters" },
+                isHidden: { type: "boolean", description: "Whether the widget is hidden" },
+                position: {
+                  type: "object",
+                  description: "Widget position and size",
+                  properties: {
+                    autoHeight: { type: "boolean", description: "Auto height" },
+                    sizeX: { type: "number", description: "Width in grid units" },
+                    sizeY: { type: "number", description: "Height in grid units" },
+                    minSizeX: { type: "number", description: "Minimum width" },
+                    maxSizeX: { type: "number", description: "Maximum width" },
+                    minSizeY: { type: "number", description: "Minimum height" },
+                    maxSizeY: { type: "number", description: "Maximum height" },
+                    col: { type: "number", description: "Column position" },
+                    row: { type: "number", description: "Row position" }
+                  },
+                  required: ["sizeX", "sizeY", "col", "row"]
+                }
+              }
+            }
+          },
+          required: ["dashboard_id"]
+        }
+      },
+      {
+        name: "update_widget",
+        description: "Update an existing widget in a dashboard",
+        inputSchema: {
+          type: "object",
+          properties: {
+            widgetId: { type: "number", description: "ID of the widget to update" },
+            text: { type: "string", description: "Text content (for text widgets)" },
+            width: { type: "number", description: "Widget width" },
+            options: {
+              type: "object",
+              description: "Widget options including position and parameter mappings",
+              properties: {
+                parameterMappings: { type: "object", description: "Parameter mappings for dashboard filters" },
+                isHidden: { type: "boolean", description: "Whether the widget is hidden" },
+                position: {
+                  type: "object",
+                  description: "Widget position and size",
+                  properties: {
+                    autoHeight: { type: "boolean", description: "Auto height" },
+                    sizeX: { type: "number", description: "Width in grid units" },
+                    sizeY: { type: "number", description: "Height in grid units" },
+                    minSizeX: { type: "number", description: "Minimum width" },
+                    maxSizeX: { type: "number", description: "Maximum width" },
+                    minSizeY: { type: "number", description: "Minimum height" },
+                    maxSizeY: { type: "number", description: "Maximum height" },
+                    col: { type: "number", description: "Column position" },
+                    row: { type: "number", description: "Row position" }
+                  },
+                  required: ["sizeX", "sizeY", "col", "row"]
+                }
+              }
+            }
+          },
+          required: ["widgetId"]
+        }
+      },
+      {
+        name: "delete_widget",
+        description: "Delete a widget from a dashboard",
+        inputSchema: {
+          type: "object",
+          properties: {
+            widgetId: { type: "number", description: "ID of the widget to delete" }
+          },
+          required: ["widgetId"]
+        }
       }
     ]
   };
@@ -780,6 +1092,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "get_visualization":
         logger.debug(`Handling get_visualization`);
         return await getVisualization(getVisualizationSchema.parse(args));
+
+      case "create_dashboard":
+        logger.debug(`Handling create_dashboard`);
+        return await createDashboard(createDashboardSchema.parse(args));
+
+      case "create_widget":
+        logger.debug(`Handling create_widget`);
+        return await createWidget(createWidgetSchema.parse(args));
+
+      case "update_widget":
+        logger.debug(`Handling update_widget`);
+        return await updateWidget(updateWidgetSchema.parse(args));
+
+      case "delete_widget":
+        logger.debug(`Handling delete_widget`);
+        return await deleteWidget(deleteWidgetSchema.parse(args));
 
       default:
         logger.error(`Unknown tool requested: ${name}`);

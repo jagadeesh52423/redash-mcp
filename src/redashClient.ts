@@ -44,6 +44,66 @@ export interface UpdateQueryRequest {
   is_draft?: boolean;
 }
 
+// New interfaces for dashboard creation
+export interface CreateDashboardRequest {
+  name: string;
+  tags?: string[];
+  is_draft?: boolean;
+  dashboard_filters_enabled?: boolean;
+}
+
+// Widget-related interfaces
+export interface WidgetPosition {
+  autoHeight?: boolean;
+  sizeX: number;
+  sizeY: number;
+  minSizeX?: number;
+  maxSizeX?: number;
+  minSizeY?: number;
+  maxSizeY?: number;
+  col: number;
+  row: number;
+}
+
+export interface ParameterMapping {
+  name: string;
+  type: string;
+  mapTo: string;
+  value?: any;
+  title: string;
+}
+
+export interface WidgetOptions {
+  parameterMappings?: Record<string, ParameterMapping>;
+  isHidden?: boolean;
+  position?: WidgetPosition;
+}
+
+export interface CreateWidgetRequest {
+  dashboard_id: number;
+  visualization_id?: number; // For visualization widgets
+  text?: string; // For text widgets
+  width?: number;
+  options?: WidgetOptions;
+}
+
+export interface UpdateWidgetRequest {
+  text?: string;
+  width?: number;
+  options?: WidgetOptions;
+}
+
+export interface RedashWidget {
+  id: number;
+  dashboard_id: number;
+  visualization_id?: number;
+  text?: string;
+  width: number;
+  options: WidgetOptions;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface RedashVisualization {
   id: number;
   type: string;
@@ -426,6 +486,51 @@ export class RedashClient {
     }
   }
 
+  // Create a new dashboard
+  async createDashboard(dashboardData: CreateDashboardRequest): Promise<RedashDashboard> {
+    try {
+      logger.info(`Creating new dashboard: ${JSON.stringify(dashboardData)}`);
+      logger.info(`Sending request to: ${this.baseUrl}/api/dashboards`);
+
+      try {
+        // Ensure we're passing the exact parameters the Redash API expects
+        const requestData = {
+          name: dashboardData.name,
+          tags: dashboardData.tags || [],
+          is_draft: dashboardData.is_draft !== undefined ? dashboardData.is_draft : true,
+          dashboard_filters_enabled: dashboardData.dashboard_filters_enabled !== undefined ? dashboardData.dashboard_filters_enabled : false
+        };
+
+        logger.info(`Request data: ${JSON.stringify(requestData)}`);
+        const response = await this.client.post('/api/dashboards', requestData);
+        logger.info(`Created dashboard with ID: ${response.data.id}`);
+        return response.data;
+      } catch (axiosError: any) {
+        // Log detailed axios error information
+        logger.error(`Axios error in createDashboard - Status: ${axiosError.response?.status || 'unknown'}`);
+        logger.error(`Response data: ${JSON.stringify(axiosError.response?.data || {}, null, 2)}`);
+        logger.error(`Request config: ${JSON.stringify({
+          url: axiosError.config?.url,
+          method: axiosError.config?.method,
+          headers: axiosError.config?.headers,
+          data: axiosError.config?.data
+        }, null, 2)}`);
+
+        if (axiosError.response) {
+          throw new Error(`Redash API error (${axiosError.response.status}): ${JSON.stringify(axiosError.response.data)}`);
+        } else if (axiosError.request) {
+          throw new Error(`No response received from Redash API: ${axiosError.message}`);
+        } else {
+          throw axiosError;
+        }
+      }
+    } catch (error) {
+      logger.error(`Error creating dashboard: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(`Stack trace: ${error instanceof Error && error.stack ? error.stack : 'No stack trace available'}`);
+      throw new Error(`Failed to create dashboard: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   // Get a specific visualization by ID
   async getVisualization(visualizationId: number): Promise<RedashVisualization> {
     try {
@@ -434,6 +539,209 @@ export class RedashClient {
     } catch (error) {
       console.error(`Error fetching visualization ${visualizationId}:`, error);
       throw new Error(`Failed to fetch visualization ${visualizationId} from Redash`);
+    }
+  }
+
+  // Create a new widget
+  async createWidget(widgetData: CreateWidgetRequest): Promise<RedashWidget> {
+    try {
+      logger.info(`Creating new widget: ${JSON.stringify(widgetData)}`);
+      logger.info(`Sending request to: ${this.baseUrl}/api/widgets`);
+
+      try {
+        // Ensure we're passing the exact parameters the Redash API expects
+        const requestData: Record<string, any> = {
+          dashboard_id: widgetData.dashboard_id,
+          width: widgetData.width || 1,
+          options: widgetData.options || {}
+        };
+
+        // For text widgets, include text field and set visualization_id to null
+        if (widgetData.text !== undefined) {
+          requestData.text = widgetData.text;
+          requestData.visualization_id = null;
+        }
+        // For visualization widgets, include visualization_id
+        else if (widgetData.visualization_id !== undefined) {
+          requestData.visualization_id = widgetData.visualization_id;
+        }
+        // If neither text nor visualization_id is provided, default to empty text widget
+        else {
+          requestData.text = "";
+          requestData.visualization_id = null;
+        }
+
+        // Ensure options has proper structure for text widgets
+        if (!requestData.options.position && requestData.text !== undefined) {
+          requestData.options.position = {
+            autoHeight: false,
+            sizeX: 3,
+            sizeY: 3,
+            minSizeX: 1,
+            maxSizeX: 6,
+            minSizeY: 1,
+            maxSizeY: 1000,
+            col: 0,
+            row: 0
+          };
+        }
+
+        // Ensure position has all required fields if it exists
+        if (requestData.options.position) {
+          const pos = requestData.options.position;
+          requestData.options.position = {
+            autoHeight: pos.autoHeight !== undefined ? pos.autoHeight : false,
+            sizeX: pos.sizeX || 3,
+            sizeY: pos.sizeY || 3,
+            minSizeX: pos.minSizeX !== undefined ? pos.minSizeX : 1,
+            maxSizeX: pos.maxSizeX !== undefined ? pos.maxSizeX : 6,
+            minSizeY: pos.minSizeY !== undefined ? pos.minSizeY : 1,
+            maxSizeY: pos.maxSizeY !== undefined ? pos.maxSizeY : 1000,
+            col: pos.col !== undefined ? pos.col : 0,
+            row: pos.row !== undefined ? pos.row : 0
+          };
+        }
+
+        // Ensure isHidden is set
+        if (requestData.options.isHidden === undefined) {
+          requestData.options.isHidden = false;
+        }
+
+        logger.info(`Request data: ${JSON.stringify(requestData)}`);
+        const response = await this.client.post('/api/widgets', requestData);
+        logger.info(`Created widget with ID: ${response.data.id}`);
+        return response.data;
+      } catch (axiosError: any) {
+        // Log detailed axios error information
+        logger.error(`Axios error in createWidget - Status: ${axiosError.response?.status || 'unknown'}`);
+        logger.error(`Response data: ${JSON.stringify(axiosError.response?.data || {}, null, 2)}`);
+        logger.error(`Request config: ${JSON.stringify({
+          url: axiosError.config?.url,
+          method: axiosError.config?.method,
+          headers: axiosError.config?.headers,
+          data: axiosError.config?.data
+        }, null, 2)}`);
+
+        if (axiosError.response) {
+          const errorData = axiosError.response.data;
+          let errorMessage = `Redash API error (${axiosError.response.status})`;
+
+          if (typeof errorData === 'string') {
+            errorMessage += `: ${errorData}`;
+          } else if (errorData && typeof errorData === 'object') {
+            if (errorData.message) {
+              errorMessage += `: ${errorData.message}`;
+            } else if (errorData.error) {
+              errorMessage += `: ${errorData.error}`;
+            } else {
+              errorMessage += `: ${JSON.stringify(errorData)}`;
+            }
+          }
+
+          throw new Error(errorMessage);
+        } else if (axiosError.request) {
+          throw new Error(`No response received from Redash API: ${axiosError.message}`);
+        } else {
+          throw axiosError;
+        }
+      }
+    } catch (error) {
+      logger.error(`Error creating widget: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(`Stack trace: ${error instanceof Error && error.stack ? error.stack : 'No stack trace available'}`);
+      throw new Error(`Failed to create widget: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Update an existing widget
+  async updateWidget(widgetId: number, widgetData: UpdateWidgetRequest): Promise<RedashWidget> {
+    try {
+      logger.debug(`Updating widget ${widgetId}: ${JSON.stringify(widgetData)}`);
+
+      try {
+        // First, get the current widget to preserve required fields
+        const currentWidget = await this.client.get(`/api/widgets/${widgetId}`);
+        const currentData = currentWidget.data;
+
+        // Construct a request payload with current data and updates
+        const requestData: Record<string, any> = {
+          id: widgetId,
+          dashboard_id: currentData.dashboard_id,
+          width: widgetData.width !== undefined ? widgetData.width : currentData.width,
+          options: widgetData.options !== undefined ? widgetData.options : currentData.options,
+          text: widgetData.text !== undefined ? widgetData.text : (currentData.text || "")
+        };
+
+        // Include visualization_id (either the actual ID or null for text widgets)
+        if (currentData.visualization_id) {
+          requestData.visualization_id = currentData.visualization_id;
+        } else {
+          requestData.visualization_id = null;
+        }
+
+        // Ensure options has proper structure with parameterMappings
+        if (requestData.options && typeof requestData.options === 'object') {
+          if (!requestData.options.parameterMappings) {
+            requestData.options.parameterMappings = {};
+          }
+          if (requestData.options.isHidden === undefined) {
+            requestData.options.isHidden = false;
+          }
+        }
+
+        logger.debug(`Request data for widget update: ${JSON.stringify(requestData)}`);
+        const response = await this.client.post(`/api/widgets/${widgetId}`, requestData);
+        logger.debug(`Updated widget ${widgetId}`);
+        return response.data;
+      } catch (axiosError: any) {
+        // Log detailed axios error information
+        logger.error(`Axios error in updateWidget - Status: ${axiosError.response?.status || 'unknown'}`);
+        logger.error(`Response data: ${JSON.stringify(axiosError.response?.data || {}, null, 2)}`);
+        logger.error(`Request config: ${JSON.stringify({
+          url: axiosError.config?.url,
+          method: axiosError.config?.method,
+          headers: axiosError.config?.headers,
+          data: axiosError.config?.data
+        }, null, 2)}`);
+
+        if (axiosError.response) {
+          const errorData = axiosError.response.data;
+          let errorMessage = `Redash API error (${axiosError.response.status})`;
+
+          if (typeof errorData === 'string') {
+            errorMessage += `: ${errorData}`;
+          } else if (errorData && typeof errorData === 'object') {
+            if (errorData.message) {
+              errorMessage += `: ${errorData.message}`;
+            } else if (errorData.error) {
+              errorMessage += `: ${errorData.error}`;
+            } else {
+              errorMessage += `: ${JSON.stringify(errorData)}`;
+            }
+          }
+
+          throw new Error(errorMessage);
+        } else if (axiosError.request) {
+          throw new Error(`No response received from Redash API: ${axiosError.message}`);
+        } else {
+          throw axiosError;
+        }
+      }
+    } catch (error) {
+      logger.error(`Error updating widget ${widgetId}: ${error}`);
+      throw new Error(`Failed to update widget ${widgetId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Delete a widget
+  async deleteWidget(widgetId: number): Promise<{ success: boolean }> {
+    try {
+      logger.debug(`Deleting widget ${widgetId}`);
+      await this.client.delete(`/api/widgets/${widgetId}`);
+      logger.debug(`Deleted widget ${widgetId}`);
+      return { success: true };
+    } catch (error) {
+      logger.error(`Error deleting widget ${widgetId}: ${error}`);
+      throw new Error(`Failed to delete widget ${widgetId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
