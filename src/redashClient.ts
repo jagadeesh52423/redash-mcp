@@ -111,6 +111,24 @@ export interface RedashVisualization {
   description: string;
   options: any;
   query_id: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// New interfaces for visualization creation and update
+export interface CreateVisualizationRequest {
+  type: string;
+  name: string;
+  description?: string;
+  options: any;
+  query_id: number;
+}
+
+export interface UpdateVisualizationRequest {
+  type?: string;
+  name?: string;
+  description?: string;
+  options?: any;
 }
 
 export interface RedashQueryResult {
@@ -152,7 +170,7 @@ export interface RedashDashboard {
     width: number;
     options: any;
     dashboard_id: number;
-  }>;
+  }> | null;
 }
 
 // RedashClient class for API communication
@@ -478,11 +496,56 @@ export class RedashClient {
   // Get a specific dashboard by ID
   async getDashboard(dashboardId: number): Promise<RedashDashboard> {
     try {
-      const response = await this.client.get(`/api/dashboards/${dashboardId}`);
-      return response.data;
-    } catch (error) {
-      console.error(`Error fetching dashboard ${dashboardId}:`, error);
-      throw new Error(`Failed to fetch dashboard ${dashboardId} from Redash`);
+      logger.debug(`Fetching dashboard ${dashboardId}`);
+
+      // First, try to get the dashboard by ID directly
+      try {
+        const response = await this.client.get(`/api/dashboards/${dashboardId}`);
+        logger.debug(`Successfully fetched dashboard ${dashboardId} by ID`);
+        return response.data;
+      } catch (directError: any) {
+        // If direct ID access fails with 404, try to find the dashboard by ID and get its slug
+        if (directError.response && directError.response.status === 404) {
+          logger.debug(`Dashboard ${dashboardId} not found by ID, trying to find by slug...`);
+
+          // Get all dashboards to find the one with matching ID
+          const dashboards = await this.getDashboards(1, 100);
+          const dashboard = dashboards.results.find(d => d.id === dashboardId);
+
+          if (!dashboard) {
+            throw new Error(`Dashboard ${dashboardId} not found`);
+          }
+
+          // Try to fetch using the slug
+          logger.debug(`Found dashboard ${dashboardId} with slug ${dashboard.slug}, fetching by slug...`);
+          const response = await this.client.get(`/api/dashboards/${dashboard.slug}`);
+          logger.debug(`Successfully fetched dashboard ${dashboardId} by slug`);
+          return response.data;
+        } else {
+          // Re-throw the original error if it's not a 404
+          throw directError;
+        }
+      }
+    } catch (error: any) {
+      logger.error(`Error fetching dashboard ${dashboardId}: ${error}`);
+
+      // Provide detailed error information
+      if (error.response) {
+        logger.error(`Axios error in getDashboard - Status: ${error.response?.status || 'unknown'}`);
+        logger.error(`Response data: ${JSON.stringify(error.response?.data || {}, null, 2)}`);
+
+        if (error.response.status === 404) {
+          throw new Error(`Dashboard ${dashboardId} not found`);
+        } else if (error.response.status === 403) {
+          throw new Error(`Access denied to dashboard ${dashboardId}`);
+        } else {
+          throw new Error(`Redash API error (${error.response.status}): ${JSON.stringify(error.response.data)}`);
+        }
+      } else if (error.request) {
+        throw new Error(`No response received from Redash API: ${error.message}`);
+      } else {
+        throw new Error(`Failed to fetch dashboard ${dashboardId} from Redash: ${error.message}`);
+      }
     }
   }
 
@@ -539,6 +602,108 @@ export class RedashClient {
     } catch (error) {
       console.error(`Error fetching visualization ${visualizationId}:`, error);
       throw new Error(`Failed to fetch visualization ${visualizationId} from Redash`);
+    }
+  }
+
+  // Create a new visualization
+  async createVisualization(visualizationData: CreateVisualizationRequest): Promise<RedashVisualization> {
+    try {
+      logger.info(`Creating new visualization: ${JSON.stringify(visualizationData)}`);
+      logger.info(`Sending request to: ${this.baseUrl}/api/visualizations`);
+
+      try {
+        // Ensure we're passing the exact parameters the Redash API expects
+        const requestData = {
+          type: visualizationData.type,
+          name: visualizationData.name,
+          description: visualizationData.description || '',
+          options: visualizationData.options,
+          query_id: visualizationData.query_id
+        };
+
+        logger.info(`Request data: ${JSON.stringify(requestData)}`);
+        const response = await this.client.post('/api/visualizations', requestData);
+        logger.info(`Created visualization with ID: ${response.data.id}`);
+        return response.data;
+      } catch (axiosError: any) {
+        // Log detailed axios error information
+        logger.error(`Axios error in createVisualization - Status: ${axiosError.response?.status || 'unknown'}`);
+        logger.error(`Response data: ${JSON.stringify(axiosError.response?.data || {}, null, 2)}`);
+        logger.error(`Request config: ${JSON.stringify({
+          url: axiosError.config?.url,
+          method: axiosError.config?.method,
+          headers: axiosError.config?.headers,
+          data: axiosError.config?.data
+        }, null, 2)}`);
+
+        if (axiosError.response) {
+          throw new Error(`Redash API error (${axiosError.response.status}): ${JSON.stringify(axiosError.response.data)}`);
+        } else if (axiosError.request) {
+          throw new Error(`No response received from Redash API: ${axiosError.message}`);
+        } else {
+          throw axiosError;
+        }
+      }
+    } catch (error) {
+      logger.error(`Error creating visualization: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(`Stack trace: ${error instanceof Error && error.stack ? error.stack : 'No stack trace available'}`);
+      throw new Error(`Failed to create visualization: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Update an existing visualization
+  async updateVisualization(visualizationId: number, visualizationData: UpdateVisualizationRequest): Promise<RedashVisualization> {
+    try {
+      logger.debug(`Updating visualization ${visualizationId}: ${JSON.stringify(visualizationData)}`);
+
+      try {
+        // Construct a request payload with only the fields we want to update
+        const requestData: Record<string, any> = {};
+
+        if (visualizationData.type !== undefined) requestData.type = visualizationData.type;
+        if (visualizationData.name !== undefined) requestData.name = visualizationData.name;
+        if (visualizationData.description !== undefined) requestData.description = visualizationData.description;
+        if (visualizationData.options !== undefined) requestData.options = visualizationData.options;
+
+        logger.debug(`Request data for visualization update: ${JSON.stringify(requestData)}`);
+        const response = await this.client.post(`/api/visualizations/${visualizationId}`, requestData);
+        logger.debug(`Updated visualization ${visualizationId}`);
+        return response.data;
+      } catch (axiosError: any) {
+        // Log detailed axios error information
+        logger.error(`Axios error in updateVisualization - Status: ${axiosError.response?.status || 'unknown'}`);
+        logger.error(`Response data: ${JSON.stringify(axiosError.response?.data || {}, null, 2)}`);
+        logger.error(`Request config: ${JSON.stringify({
+          url: axiosError.config?.url,
+          method: axiosError.config?.method,
+          headers: axiosError.config?.headers,
+          data: axiosError.config?.data
+        }, null, 2)}`);
+
+        if (axiosError.response) {
+          throw new Error(`Redash API error (${axiosError.response.status}): ${JSON.stringify(axiosError.response.data)}`);
+        } else if (axiosError.request) {
+          throw new Error(`No response received from Redash API: ${axiosError.message}`);
+        } else {
+          throw axiosError;
+        }
+      }
+    } catch (error) {
+      logger.error(`Error updating visualization ${visualizationId}: ${error}`);
+      throw new Error(`Failed to update visualization ${visualizationId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Delete a visualization
+  async deleteVisualization(visualizationId: number): Promise<{ success: boolean }> {
+    try {
+      logger.debug(`Deleting visualization ${visualizationId}`);
+      await this.client.delete(`/api/visualizations/${visualizationId}`);
+      logger.debug(`Deleted visualization ${visualizationId}`);
+      return { success: true };
+    } catch (error) {
+      logger.error(`Error deleting visualization ${visualizationId}: ${error}`);
+      throw new Error(`Failed to delete visualization ${visualizationId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

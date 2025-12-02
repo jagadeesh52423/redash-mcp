@@ -10,7 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as dotenv from 'dotenv';
-import { redashClient, CreateQueryRequest, UpdateQueryRequest, CreateDashboardRequest, CreateWidgetRequest, UpdateWidgetRequest, initializeRedashClient, getRedashClient } from "./redashClient.js";
+import { redashClient, CreateQueryRequest, UpdateQueryRequest, CreateDashboardRequest, CreateWidgetRequest, UpdateWidgetRequest, CreateVisualizationRequest, UpdateVisualizationRequest, initializeRedashClient, getRedashClient } from "./redashClient.js";
 import { logger, LogLevel } from "./logger.js";
 
 // Load environment variables
@@ -95,12 +95,33 @@ const createQuerySchema = z.object({
   description: z.string().optional(),
   options: z.any().optional(),
   schedule: z.any().optional(),
-  tags: z.array(z.string()).optional()
+  tags: z.array(z.string()).optional(),
+  skipValidation: z.boolean().optional()
 });
 
 async function createQuery(params: z.infer<typeof createQuerySchema>) {
   try {
     logger.debug(`Create query params: ${JSON.stringify(params)}`);
+
+    // Validate query by executing it first (unless skipValidation is true)
+    if (!params.skipValidation) {
+      try {
+        logger.info(`Validating query by executing it first...`);
+        await getRedashClient().executeQuery(params.query, params.data_source_id, {}, 0);
+        logger.info(`Query validation successful - query executes without errors`);
+      } catch (validationError) {
+        logger.error(`Query validation failed: ${validationError}`);
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `Query validation failed - the query has syntax or execution errors: ${validationError instanceof Error ? validationError.message : String(validationError)}`
+          }]
+        };
+      }
+    } else {
+      logger.info(`Skipping query validation as requested`);
+    }
 
     // Convert params to CreateQueryRequest with proper defaults
     const queryData: CreateQueryRequest = {
@@ -150,14 +171,41 @@ const updateQuerySchema = z.object({
   schedule: z.any().optional(),
   tags: z.array(z.string()).optional(),
   is_archived: z.boolean().optional(),
-  is_draft: z.boolean().optional()
+  is_draft: z.boolean().optional(),
+  skipValidation: z.boolean().optional()
 });
 
 async function updateQuery(params: z.infer<typeof updateQuerySchema>) {
   try {
-    const { queryId, ...updateData } = params;
+    const { queryId, skipValidation, ...updateData } = params;
 
     logger.debug(`Update query ${queryId} params: ${JSON.stringify(updateData)}`);
+
+    // If query is being updated and validation is not skipped, validate it first
+    if (updateData.query && !skipValidation) {
+      try {
+        logger.info(`Validating updated query by executing it first...`);
+        // Use provided data_source_id or get it from existing query
+        let dataSourceId = updateData.data_source_id;
+        if (!dataSourceId) {
+          const existingQuery = await getRedashClient().getQuery(queryId);
+          dataSourceId = existingQuery.data_source_id;
+        }
+        await getRedashClient().executeQuery(updateData.query, dataSourceId, {}, 0);
+        logger.info(`Query validation successful - updated query executes without errors`);
+      } catch (validationError) {
+        logger.error(`Query validation failed: ${validationError}`);
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `Query validation failed - the updated query has syntax or execution errors: ${validationError instanceof Error ? validationError.message : String(validationError)}`
+          }]
+        };
+      }
+    } else if (updateData.query && skipValidation) {
+      logger.info(`Skipping query validation as requested`);
+    }
 
     // Convert params to UpdateQueryRequest - only include non-undefined fields
     const queryData: UpdateQueryRequest = {};
@@ -193,6 +241,193 @@ async function updateQuery(params: z.infer<typeof updateQuerySchema>) {
         {
           type: "text",
           text: `Error updating query ${params.queryId}: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: update_query_parameter_type
+const updateQueryParameterTypeSchema = z.object({
+  queryId: z.number(),
+  parameterName: z.string(),
+  newType: z.string(),
+  newValue: z.string().optional(),
+  enumOptions: z.string().optional()
+});
+
+async function updateQueryParameterType(params: z.infer<typeof updateQueryParameterTypeSchema>) {
+  try {
+    const { queryId, parameterName, newType, newValue, enumOptions } = params;
+
+    logger.debug(`Update query ${queryId} parameter ${parameterName} type to ${newType}`);
+
+    // First, get the current query to retrieve its options
+    const currentQuery = await getRedashClient().getQuery(queryId);
+
+    if (!currentQuery.options || !currentQuery.options.parameters) {
+      return {
+        isError: true,
+        content: [{
+          type: "text",
+          text: `Query ${queryId} has no parameters to update`
+        }]
+      };
+    }
+
+    // Find and update the specific parameter
+    const parameters = currentQuery.options.parameters.map((param: any) => {
+      if (param.name === parameterName) {
+        const updatedParam = { ...param };
+        updatedParam.type = newType;
+        if (newValue !== undefined) {
+          updatedParam.value = newValue;
+        }
+        // Add or update enumOptions for enum type parameters
+        if (newType === 'enum' && enumOptions) {
+          updatedParam.enumOptions = enumOptions;
+        } else if (newType !== 'enum' && updatedParam.enumOptions) {
+          // Remove enumOptions if changing away from enum type
+          delete updatedParam.enumOptions;
+        }
+        return updatedParam;
+      }
+      return param;
+    });
+
+    // Check if parameter was found
+    const parameterFound = parameters.some((param: any) => param.name === parameterName);
+    if (!parameterFound) {
+      return {
+        isError: true,
+        content: [{
+          type: "text",
+          text: `Parameter '${parameterName}' not found in query ${queryId}`
+        }]
+      };
+    }
+
+    // Update the query with the modified parameters
+    const updatedOptions = {
+      ...currentQuery.options,
+      parameters: parameters
+    };
+
+    const queryData: UpdateQueryRequest = {
+      options: updatedOptions
+    };
+
+    logger.debug(`Calling redashClient.updateQuery with new parameter type: ${JSON.stringify(queryData)}`);
+    const result = await getRedashClient().updateQuery(queryId, queryData);
+    logger.debug(`Update query parameter type result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Successfully updated parameter '${parameterName}' type to '${newType}' in query ${queryId}. Updated query: ${JSON.stringify(result, null, 2)}`
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error updating query parameter type: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error updating query parameter type: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: add_query_parameter
+const addQueryParameterSchema = z.object({
+  queryId: z.number(),
+  parameterName: z.string(),
+  parameterType: z.string(),
+  title: z.string().optional(),
+  defaultValue: z.string().optional(),
+  global: z.boolean().optional(),
+  enumOptions: z.string().optional()
+});
+
+async function addQueryParameter(params: z.infer<typeof addQueryParameterSchema>) {
+  try {
+    const { queryId, parameterName, parameterType, title, defaultValue, global, enumOptions } = params;
+
+    logger.debug(`Add parameter ${parameterName} of type ${parameterType} to query ${queryId}`);
+
+    // First, get the current query to retrieve its options
+    const currentQuery = await getRedashClient().getQuery(queryId);
+
+    // Initialize options and parameters if they don't exist
+    const currentOptions = currentQuery.options || {};
+    const currentParameters = currentOptions.parameters || [];
+
+    // Check if parameter already exists
+    const existingParam = currentParameters.find((param: any) => param.name === parameterName);
+    if (existingParam) {
+      return {
+        isError: true,
+        content: [{
+          type: "text",
+          text: `Parameter '${parameterName}' already exists in query ${queryId}. Use update_query_parameter_type to modify it.`
+        }]
+      };
+    }
+
+    // Create the new parameter object
+    const newParameter: any = {
+      title: title || parameterName,
+      name: parameterName,
+      type: parameterType,
+      global: global || false,
+      parentQueryId: queryId,
+      locals: [],
+      value: defaultValue || null
+    };
+
+    // Add enumOptions for enum type parameters
+    if (parameterType === 'enum' && enumOptions) {
+      newParameter.enumOptions = enumOptions;
+    }
+
+    // Add the new parameter to the parameters array
+    const updatedParameters = [...currentParameters, newParameter];
+
+    // Update the query with the new parameters
+    const updatedOptions = {
+      ...currentOptions,
+      parameters: updatedParameters
+    };
+
+    const queryData: UpdateQueryRequest = {
+      options: updatedOptions
+    };
+
+    logger.debug(`Calling redashClient.updateQuery with new parameter: ${JSON.stringify(queryData)}`);
+    const result = await getRedashClient().updateQuery(queryId, queryData);
+    logger.debug(`Add query parameter result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Successfully added parameter '${parameterName}' of type '${parameterType}' to query ${queryId}. Updated query: ${JSON.stringify(result, null, 2)}`
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error adding query parameter: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error adding query parameter: ${error instanceof Error ? error.message : String(error)}`
         }
       ]
     };
@@ -673,6 +908,135 @@ async function deleteWidget(params: z.infer<typeof deleteWidgetSchema>) {
   }
 }
 
+// Tool: create_visualization
+const createVisualizationSchema = z.object({
+  type: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  options: z.any(),
+  query_id: z.number()
+});
+
+async function createVisualization(params: z.infer<typeof createVisualizationSchema>) {
+  try {
+    logger.debug(`Create visualization params: ${JSON.stringify(params)}`);
+
+    // Convert params to CreateVisualizationRequest with proper defaults
+    const visualizationData: CreateVisualizationRequest = {
+      type: params.type,
+      name: params.name,
+      description: params.description || '',
+      options: params.options,
+      query_id: params.query_id
+    };
+
+    logger.debug(`Calling redashClient.createVisualization with data: ${JSON.stringify(visualizationData)}`);
+    const result = await getRedashClient().createVisualization(visualizationData);
+    logger.debug(`Create visualization result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error creating visualization: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error creating visualization: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: update_visualization
+const updateVisualizationSchema = z.object({
+  visualizationId: z.number(),
+  type: z.string().optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  options: z.any().optional()
+});
+
+async function updateVisualization(params: z.infer<typeof updateVisualizationSchema>) {
+  try {
+    const { visualizationId, ...updateData } = params;
+    logger.debug(`Update visualization ${visualizationId} params: ${JSON.stringify(updateData)}`);
+
+    // Convert params to UpdateVisualizationRequest - only include non-undefined fields
+    const visualizationData: UpdateVisualizationRequest = {};
+
+    // Only add fields that are defined
+    if (updateData.type !== undefined) visualizationData.type = updateData.type;
+    if (updateData.name !== undefined) visualizationData.name = updateData.name;
+    if (updateData.description !== undefined) visualizationData.description = updateData.description;
+    if (updateData.options !== undefined) visualizationData.options = updateData.options;
+
+    logger.debug(`Calling redashClient.updateVisualization with data: ${JSON.stringify(visualizationData)}`);
+    const result = await getRedashClient().updateVisualization(visualizationId, visualizationData);
+    logger.debug(`Update visualization result: ${JSON.stringify(result)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error updating visualization ${params.visualizationId}: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error updating visualization ${params.visualizationId}: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
+// Tool: delete_visualization
+const deleteVisualizationSchema = z.object({
+  visualizationId: z.number()
+});
+
+async function deleteVisualization(params: z.infer<typeof deleteVisualizationSchema>) {
+  try {
+    const { visualizationId } = params;
+    const result = await getRedashClient().deleteVisualization(visualizationId);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  } catch (error) {
+    logger.error(`Error deleting visualization ${params.visualizationId}: ${error}`);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error deleting visualization ${params.visualizationId}: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ]
+    };
+  }
+}
+
 // ----- Resources Implementation -----
 
 // List available resources
@@ -795,7 +1159,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             description: { type: "string", description: "Description of the query" },
             options: { type: "object", description: "Query options" },
             schedule: { type: "object", description: "Query schedule" },
-            tags: { type: "array", items: { type: "string" }, description: "Tags for the query" }
+            tags: { type: "array", items: { type: "string" }, description: "Tags for the query" },
+            skipValidation: { type: "boolean", description: "Skip query validation by execution (default: false - validation is performed)" }
           },
           required: ["name", "data_source_id", "query"]
         }
@@ -815,9 +1180,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             schedule: { type: "object", description: "Query schedule" },
             tags: { type: "array", items: { type: "string" }, description: "Tags for the query" },
             is_archived: { type: "boolean", description: "Whether the query is archived" },
-            is_draft: { type: "boolean", description: "Whether the query is a draft" }
+            is_draft: { type: "boolean", description: "Whether the query is a draft" },
+            skipValidation: { type: "boolean", description: "Skip query validation by execution when updating query text (default: false - validation is performed)" }
           },
           required: ["queryId"]
+        }
+      },
+      {
+        name: "update_query_parameter_type",
+        description: "Update the type of a specific parameter in a Redash query",
+        inputSchema: {
+          type: "object",
+          properties: {
+            queryId: { type: "number", description: "ID of the query to update" },
+            parameterName: { type: "string", description: "Name of the parameter to update" },
+            newType: { type: "string", description: "New type for the parameter (e.g., 'text', 'number', 'date-range', 'date', 'enum', etc.)" },
+            newValue: { type: "string", description: "Optional new default value for the parameter" },
+            enumOptions: { type: "string", description: "Optional enum options for 'enum' type parameters (newline-separated values)" }
+          },
+          required: ["queryId", "parameterName", "newType"]
+        }
+      },
+      {
+        name: "add_query_parameter",
+        description: "Add a new parameter to a Redash query",
+        inputSchema: {
+          type: "object",
+          properties: {
+            queryId: { type: "number", description: "ID of the query to add parameter to" },
+            parameterName: { type: "string", description: "Name of the parameter to add" },
+            parameterType: { type: "string", description: "Type of the parameter (e.g., 'text', 'number', 'date-range', 'date', 'enum', etc.)" },
+            title: { type: "string", description: "Optional display title for the parameter (defaults to parameterName)" },
+            defaultValue: { type: "string", description: "Optional default value for the parameter" },
+            global: { type: "boolean", description: "Optional flag to make the parameter global (defaults to false)" },
+            enumOptions: { type: "string", description: "Optional enum options for 'enum' type parameters (newline-separated values)" }
+          },
+          required: ["queryId", "parameterName", "parameterType"]
         }
       },
       {
@@ -1005,6 +1403,47 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["widgetId"]
         }
+      },
+      {
+        name: "create_visualization",
+        description: "Create a new visualization for a query in Redash",
+        inputSchema: {
+          type: "object",
+          properties: {
+            type: { type: "string", description: "Type of visualization (e.g., CHART, TABLE, COUNTER, etc.)" },
+            name: { type: "string", description: "Name of the visualization" },
+            description: { type: "string", description: "Description of the visualization" },
+            options: { type: "object", description: "Visualization options and configuration" },
+            query_id: { type: "number", description: "ID of the query to visualize" }
+          },
+          required: ["type", "name", "options", "query_id"]
+        }
+      },
+      {
+        name: "update_visualization",
+        description: "Update an existing visualization in Redash",
+        inputSchema: {
+          type: "object",
+          properties: {
+            visualizationId: { type: "number", description: "ID of the visualization to update" },
+            type: { type: "string", description: "Type of visualization (e.g., CHART, TABLE, COUNTER, etc.)" },
+            name: { type: "string", description: "Name of the visualization" },
+            description: { type: "string", description: "Description of the visualization" },
+            options: { type: "object", description: "Visualization options and configuration" }
+          },
+          required: ["visualizationId"]
+        }
+      },
+      {
+        name: "delete_visualization",
+        description: "Delete a visualization from Redash",
+        inputSchema: {
+          type: "object",
+          properties: {
+            visualizationId: { type: "number", description: "ID of the visualization to delete" }
+          },
+          required: ["visualizationId"]
+        }
       }
     ]
   };
@@ -1048,6 +1487,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{
             type: "text",
             text: `Invalid parameters for update_query: ${validationError instanceof Error ? validationError.message : String(validationError)}`
+          }]
+        };
+      }
+    } else if (name === "update_query_parameter_type") {
+      try {
+        logger.debug(`Validating update_query_parameter_type schema`);
+        const validatedArgs = updateQueryParameterTypeSchema.parse(args);
+        logger.debug(`Schema validation passed for update_query_parameter_type: ${JSON.stringify(validatedArgs)}`);
+        return await updateQueryParameterType(validatedArgs);
+      } catch (validationError) {
+        logger.error(`Schema validation failed for update_query_parameter_type: ${validationError}`);
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `Invalid parameters for update_query_parameter_type: ${validationError instanceof Error ? validationError.message : String(validationError)}`
+          }]
+        };
+      }
+    } else if (name === "add_query_parameter") {
+      try {
+        logger.debug(`Validating add_query_parameter schema`);
+        const validatedArgs = addQueryParameterSchema.parse(args);
+        logger.debug(`Schema validation passed for add_query_parameter: ${JSON.stringify(validatedArgs)}`);
+        return await addQueryParameter(validatedArgs);
+      } catch (validationError) {
+        logger.error(`Schema validation failed for add_query_parameter: ${validationError}`);
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `Invalid parameters for add_query_parameter: ${validationError instanceof Error ? validationError.message : String(validationError)}`
           }]
         };
       }
@@ -1108,6 +1579,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "delete_widget":
         logger.debug(`Handling delete_widget`);
         return await deleteWidget(deleteWidgetSchema.parse(args));
+
+      case "create_visualization":
+        logger.debug(`Handling create_visualization`);
+        return await createVisualization(createVisualizationSchema.parse(args));
+
+      case "update_visualization":
+        logger.debug(`Handling update_visualization`);
+        return await updateVisualization(updateVisualizationSchema.parse(args));
+
+      case "delete_visualization":
+        logger.debug(`Handling delete_visualization`);
+        return await deleteVisualization(deleteVisualizationSchema.parse(args));
 
       default:
         logger.error(`Unknown tool requested: ${name}`);
